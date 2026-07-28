@@ -1,0 +1,2 @@
+# Trivy vulnerability ignore list for false positives or accepted risks
+# Format: CVE-YYYY-XXXX

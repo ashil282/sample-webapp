@@ -1,0 +1,20 @@
+---
+rules:
+  - id: express-no-eval
+    patterns:
+      - pattern: eval(...)
+    message: >-
+      Critical Security Risk: Detected usage of eval().
+      Refactor to avoid dynamic code execution.
+    severity: ERROR
+    languages: [javascript]
+
+  - id: express-hardcoded-secrets
+    patterns:
+      - pattern-regex: >-
+          (?i)(api_key|secret|password|jwt_secret)\s*=\s*['"](?!PROCESS\.ENV)[A-Za-z0-9/+=]{8,}['"]
+    message: >-
+      Possible hardcoded secret detected.
+      Use environment variables.
+    severity: ERROR
+    languages: [javascript]
