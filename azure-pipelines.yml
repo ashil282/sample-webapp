@@ -6,95 +6,92 @@ trigger:
       - master
 
 pool:
-  name: 'Default"
+  name: Default
 
 stages:
   - stage: SecretScanning
-    displayName: "01. Secret & Credentials Gate"
+    displayName: Secret and Credentials Gate
     jobs:
       - job: gitleaks_scan
-        displayName: "Run Gitleaks"
+        displayName: Run Gitleaks
         steps:
           - checkout: self
           - script: |
-              echo "Checking for committed credentials..."
               if command -v gitleaks &> /dev/null; then
                 gitleaks detect --source . --verbose
               else
-                echo "Gitleaks not found globally. Running Docker..."
                 docker run --rm \
                   -v $(System.DefaultWorkingDirectory):/path \
                   zricethezav/gitleaks:latest detect --source="/path" --verbose
               fi
-            displayName: "Execute Gitleaks Scan"
+            displayName: Execute Gitleaks Scan
 
   - stage: CI_Testing
-    displayName: "02. Build & Unit Test"
+    displayName: Build and Unit Test
     dependsOn: SecretScanning
     jobs:
       - job: node_ci
-        displayName: "Execute Native Node 22 Test Suite"
+        displayName: Execute Native Node 22 Test Suite
         steps:
           - checkout: self
           - task: NodeTool@0
-            displayName: "Set Node.js 22 Environment"
+            displayName: Set Node.js 22 Environment
             inputs:
-              versionSpec: "22.x"
+              versionSpec: '22.x'
           - script: |
               npm ci
               npm test
-            displayName: "Install Clean Lockfile & Run Unit Tests"
+            displayName: Install Clean Lockfile and Run Unit Tests
 
   - stage: SAST_SCA
-    displayName: "03. Code & Dependency Analysis"
+    displayName: Code and Dependency Analysis
     dependsOn: CI_Testing
     jobs:
       - job: static_security
-        displayName: "Semgrep SAST & Trivy Filesystem SCA"
+        displayName: Semgrep SAST and Trivy Filesystem SCA
         steps:
           - checkout: self
           - script: |
               pip install semgrep --quiet
               semgrep --config security/semgrep.yml src
-            displayName: "Run Semgrep SAST Scan"
+            displayName: Run Semgrep SAST Scan
 
           - script: |
               trivy fs \
                 --exit-code 1 \
-                --severity HIGH,CRITICAL \
-                --ignorefile security/trivyignore .
-            displayName: "Run Trivy Filesystem SCA Audit"
+                --severity HIGH,CRITICAL .
+            displayName: Run Trivy Filesystem SCA Audit
 
   - stage: Container_Security
-    displayName: "04. Image Build & Vulnerability Scan"
+    displayName: Image Build and Vulnerability Scan
     dependsOn: SAST_SCA
     jobs:
       - job: docker_build_scan
-        displayName: "Build & Scan Hardened Image"
+        displayName: Build and Scan Hardened Image
         steps:
           - checkout: self
           - script: |
               docker build -f docker/Dockerfile -t sample-webapp:latest .
-            displayName: "Build Non-Root Multi-Stage Image"
+            displayName: Build Non-Root Multi-Stage Image
 
           - script: |
               trivy image \
                 --exit-code 1 \
                 --severity HIGH,CRITICAL sample-webapp:latest
-            displayName: "Scan Built Image with Trivy"
+            displayName: Scan Built Image with Trivy
 
   - stage: DAST
-    displayName: "05. Dynamic Runtime Testing (OWASP ZAP)"
+    displayName: Dynamic Runtime Testing OWASP ZAP
     dependsOn: Container_Security
     jobs:
       - job: zap_scan
-        displayName: "Execute ZAP Baseline Scan"
+        displayName: Execute ZAP Baseline Scan
         steps:
           - checkout: self
           - script: |
               cd docker
               docker compose up -d
-            displayName: "Spin Up App Container"
+            displayName: Spin Up App Container
 
           - script: |
               docker run --rm \
@@ -103,19 +100,19 @@ stages:
                 owasp/zap2docker-stable zap-baseline.py \
                 -t http://127.0.0.1:3000 \
                 -r zap-report.html || true
-            displayName: "Run OWASP ZAP Baseline Scan"
+            displayName: Run OWASP ZAP Baseline Scan
 
           - script: |
               cd docker
               docker compose down
-            displayName: "Tear Down Local Test Infrastructure"
+            displayName: Tear Down Infrastructure
 
   - stage: IaC_Governance
-    displayName: "06. Infrastructure as Code Validation"
+    displayName: Infrastructure as Code Validation
     dependsOn: DAST
     jobs:
       - job: terraform_governance
-        displayName: "Terraform Lint, Validate & Plan"
+        displayName: Terraform Lint Validate and Plan
         steps:
           - checkout: self
           - script: |
@@ -124,4 +121,4 @@ stages:
               terraform fmt -check
               terraform validate
               terraform plan
-            displayName: "Run Terraform Static Check & Plan-Only"
+            displayName: Run Terraform Static Check and Plan-Only
