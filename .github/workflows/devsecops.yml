@@ -1,0 +1,84 @@
+name: DevSecOps Enterprise Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  # ==========================================
+  # JOB 1: SECRETS & SAST SCANNING
+  # ==========================================
+  static-analysis:
+    name: Static Code Security (Gitleaks & Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Gitleaks (Secrets)
+        run: |
+          docker run --rm -v $(pwd):/path zricethezav/gitleaks:latest detect --source=/path --verbose || true
+
+      - name: Run Semgrep (SAST)
+        run: |
+          docker run --rm -v $(pwd):/src returntocorp/semgrep semgrep scan --config=p/ci || true
+
+  # ==========================================
+  # JOB 2: CONTAINER BUILD & TRIVY SCAN
+  # ==========================================
+  container-security:
+    name: Container Build & Vulnerability Scan
+    needs: static-analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: |
+          docker build -t sample-webapp:local .
+
+      - name: Run Trivy Scan
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v /tmp/trivy-cache:/root/.cache/ \
+            aquasec/trivy:latest image \
+            --severity HIGH,CRITICAL \
+            --skip-db-update \
+            sample-webapp:local
+
+  # ==========================================
+  # JOB 3: DAST & IAC SECURITY
+  # ==========================================
+  dynamic-analysis:
+    name: Dynamic & IaC Security (ZAP & Checkov)
+    needs: container-security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Spin Up Local Container
+        run: |
+          docker run -d --name app-test -p 3000:3000 sample-webapp:local
+          sleep 5
+
+      - name: OWASP ZAP Baseline Scan
+        run: |
+          docker run --rm --network="host" \
+            -v $(pwd):/zap/wrk/:rw \
+            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+            -t http://127.0.0.1:3000 -I || true
+
+      - name: Cleanup Container
+        if: always()
+        run: |
+          docker stop app-test || true
+          docker rm app-test || true
+
+      - name: Run Checkov (IaC Scan)
+        run: |
+          docker run --rm -v $(pwd):/tf bridgecrew/checkov:latest -d /tf --soft-fail
