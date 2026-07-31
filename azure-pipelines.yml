@@ -1,151 +1,50 @@
+---
 trigger:
-  branches:
-    include:
-      - main
-      - master
+  - main
 
 pool:
-  name: 'Default'  # Your self-hosted agent pool
-
-variables:
-  DOCKER_IMAGE_NAME: 'sample-webapp'
-  DOCKER_TAG: '$(Build.BuildId)'
+  vmImage: ubuntu-latest
 
 stages:
+  - stage: Security
+    displayName: Security Scanning
+    jobs:
+      - job: SAST
+        displayName: Run SAST & Secret Scan
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.11'
+            displayName: Set Python 3.11
 
-# ==========================================
-# STAGE 1: SECRET SCANNING
-# ==========================================
-- stage: SecretScanning
-  displayName: 'Stage 01: Secret Scanning'
-  jobs:
-  - job: RunGitleaks
-    displayName: 'Gitleaks Scan'
-    steps:
-    - script: |
-        docker run --rm \
-          -v $(Build.SourcesDirectory):/path \
-          zricethezav/gitleaks:latest detect \
-          --source=/path \
-          --verbose \
-          --exit-code=0
-      workingDirectory: '$(Build.SourcesDirectory)'
-      displayName: 'Detect Hardcoded Secrets'
+          - script: |
+              python -m pip install --upgrade pip
+              pip install bandit
+              bandit -r app.py
+            displayName: Run Bandit
 
-# ==========================================
-# STAGE 2: SAST & SCA
-# ==========================================
-- stage: SAST_SCA
-  displayName: 'Stage 02: SAST & SCA'
-  dependsOn: SecretScanning
-  condition: succeededOrFailed()
-  jobs:
-  - job: RunSemgrep
-    displayName: 'Semgrep Scan'
-    steps:
-    - script: |
-        docker run --rm \
-          -v $(Build.SourcesDirectory):/src \
-          returntocorp/semgrep semgrep scan \
-          --config=p/ci \
-          --error || true
-      workingDirectory: '$(Build.SourcesDirectory)'
-      displayName: 'Execute Semgrep SAST Scan'
+          - script: |
+              docker run --rm \
+                -v $(System.DefaultWorkingDirectory):/path \
+                zricethezav/gitleaks:latest detect \
+                --source=/path --verbose || true
+            displayName: Run Gitleaks
 
-  - job: RunNpmAudit
-    displayName: 'SCA Dependency Check'
-    steps:
-    - task: NodeTool@0
-      inputs:
-        versionSpec: '22.x'
-      displayName: 'Install Node.js 22'
+  - stage: Build
+    displayName: Container Build & Scan
+    dependsOn: Security
+    jobs:
+      - job: DockerBuild
+        displayName: Build and Scan Docker Image
+        steps:
+          - script: |
+              docker build -t sample-webapp:latest .
+            displayName: Build Docker Image
 
-    - script: |
-        npm ci
-        npm audit --audit-level=high || true
-      workingDirectory: '$(Build.SourcesDirectory)'
-      displayName: 'Run npm audit for Vulnerabilities'
-
-# ==========================================
-# STAGE 3: BUILD & CONTAINER SECURITY
-# ==========================================
-- stage: ContainerSecurity
-  displayName: 'Stage 03: Build & Container Security'
-  dependsOn: SAST_SCA
-  condition: succeededOrFailed()
-  jobs:
-  - job: BuildAndScanImage
-    displayName: 'Build and Scan Docker Image'
-    timeoutInMinutes: 10
-    steps:
-    - script: |
-        pwd
-        ls -la
-        docker build -t $(DOCKER_IMAGE_NAME):$(DOCKER_TAG) -f Dockerfile .
-        docker tag $(DOCKER_IMAGE_NAME):$(DOCKER_TAG) $(DOCKER_IMAGE_NAME):latest
-      workingDirectory: '$(Build.SourcesDirectory)'
-      displayName: 'Build Docker Image'
-
-    - script: |
-        docker run --rm \
-          -v /var/run/docker.sock:/var/run/docker.sock \
-          -v /tmp/trivy-cache:/root/.cache/ \
-          aquasec/trivy:latest image \
-          --severity HIGH,CRITICAL \
-          --exit-code 0 \
-          --skip-db-update \
-          --light \
-          $(DOCKER_IMAGE_NAME):latest
-      workingDirectory: '$(Build.SourcesDirectory)'
-      displayName: 'Scan Built Image with Trivy'
-
-# ==========================================
-# STAGE 4: DAST (DYNAMIC APPLICATION SECURITY TESTING)
-# ==========================================
-- stage: DAST
-  displayName: 'Stage 04: DAST (OWASP ZAP)'
-  dependsOn: ContainerSecurity
-  condition: succeededOrFailed()
-  jobs:
-  - job: RunOWASPZAP
-    displayName: 'OWASP ZAP Scan'
-    steps:
-    - script: |
-        docker run -d --name app-test -p 3000:3000 $(DOCKER_IMAGE_NAME):latest
-        sleep 5
-      displayName: 'Spin Up Container'
-
-    - script: |
-        docker run --rm \
-          --network="host" \
-          -v $(Build.SourcesDirectory):/zap/wrk/:rw \
-          ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-          -t http://127.0.0.1:3000 \
-          -I || true
-      displayName: 'Execute ZAP Scan'
-
-    - script: |
-        docker stop app-test || true
-        docker rm app-test || true
-      displayName: 'Cleanup Container'
-      condition: always()
-
-# ==========================================
-# STAGE 5: IAC SECURITY & TERRAFORM CHECK
-# ==========================================
-- stage: IaCSecurity
-  displayName: 'Stage 05: Infrastructure as Code (Checkov)'
-  dependsOn: DAST
-  condition: succeededOrFailed()
-  jobs:
-  - job: RunCheckov
-    displayName: 'Checkov Static Analysis'
-    steps:
-    - script: |
-        docker run --rm \
-          -v $(Build.SourcesDirectory):/tf \
-          bridgecrew/checkov:latest \
-          -d /tf \
-          --soft-fail
-      workingDirectory: '$(Build.SourcesDirectory)'
-      displayName: 'Scan Infrastructure Files with Checkov'
+          - script: |
+              docker run --rm \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                aquasec/trivy:latest image \
+                --severity HIGH,CRITICAL \
+                sample-webapp:latest
+            displayName: Run Trivy Scan
