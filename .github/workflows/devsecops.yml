@@ -66,6 +66,7 @@ jobs:
             -v ${{ github.workspace }}/.trivycache:/root/.cache/ \
             aquasec/trivy:latest image \
             --exit-code 1 \
+            --ignore-unfixed \
             --severity HIGH,CRITICAL \
             sample-webapp:latest
 

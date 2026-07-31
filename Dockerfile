@@ -1,30 +1,16 @@
-# Stage 1: Build & Install Dependencies
-FROM node:22-alpine AS builder
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy dependency manifests
-COPY package*.json ./
+# Upgrade base OS packages to strip out OS-level vulnerabilities
+RUN apt-get update && apt-get upgrade -y && \
+    rm -rf /var/lib/apt-get/lists/*
 
-# Install dependencies cleanly
-RUN npm ci
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code
 COPY . .
 
-# Stage 2: Production Minimal Runtime (Hardened Security)
-FROM node:22-alpine AS runner
+EXPOSE 8000
 
-WORKDIR /app
-
-ENV NODE_ENV=production
-
-# Copy built application and node_modules from builder stage
-COPY --from=builder /app ./
-
-# Use unprivileged non-root node user for security compliance
-USER node
-
-EXPOSE 3000
-
-CMD ["npm", "start"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
