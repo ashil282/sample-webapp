@@ -1,24 +1,35 @@
-FROM python:3.11-slim
+# --- Stage 1: Build & Dependencies ---
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# 1. Update OS packages
 RUN apt-get update && apt-get upgrade -y && \
     rm -rf /var/lib/apt-get/lists/*
 
-# 2. Upgrade pip and explicitly pin secure versions of build tools
-RUN python -m pip install --upgrade "pip>=24.0" "setuptools>=78.1.1" "wheel>=0.46.2"
-
-# 3. Install application dependencies and enforce secure msgpack
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade "msgpack>=1.2.1" && \
-    pip install --no-cache-dir -r requirements.txt
 
-# 4. Clean up unnecessary build packages from runtime python environment
-RUN pip uninstall -y setuptools wheel || true
+# Install dependencies into a separate wheels/site-packages directory
+RUN python -m pip install --upgrade pip "setuptools>=78.1.1" "msgpack>=1.2.1" && \
+    pip install --no-cache-dir --prefix=/install -r requirements.txt "msgpack>=1.2.1"
 
-# 5. Copy application source code
+# --- Stage 2: Final Secure Production Runtime ---
+FROM python:3.11-slim AS runner
+
+WORKDIR /app
+
+# Upgrade base OS packages
+RUN apt-get update && apt-get upgrade -y && \
+    rm -rf /var/lib/apt-get/lists/*
+
+# Copy installed packages from builder stage
+COPY --from=builder /install /usr/local
+
+# Copy application source code
 COPY . .
+
+# Remove setuptools/pip/wheel artifacts from runtime python site-packages
+RUN rm -rf /usr/local/lib/python3.11/site-packages/setuptools* \
+           /usr/local/lib/python3.11/site-packages/pkg_resources
 
 EXPOSE 8000
 
